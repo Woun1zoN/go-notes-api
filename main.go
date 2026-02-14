@@ -33,6 +33,16 @@ type Note struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 // DTO Models
 
 type CreateDTO struct {
@@ -43,6 +53,27 @@ type CreateDTO struct {
 type PatchDTO struct {
     Title   *string `json:"title" validate:"required,min=1"`
     Content *string `json:"content" validate:"omitempty,min=1"`
+}
+
+// MiddleWare Logger
+
+func Logger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		rw := &responseWriter{
+			ResponseWriter: w,
+			status:         http.StatusOK,
+		}
+
+		next.ServeHTTP(rw, r)
+
+		duration := time.Since(start)
+
+		log.Printf(
+			"[%s] | {%s} | [Status: %d] %v | [IP:PORT - %s]\nUser Agent: %s", r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr, r.UserAgent(),
+		)
+	})
 }
 
 // General handler
@@ -226,6 +257,9 @@ func main() {
 	// Connection DB & Configs
 
 	r := chi.NewRouter()
+	r.Use(Logger)
+	ctx := context.Background()
+
 	_ = godotenv.Load()
 	conn := fmt.Sprintf(
 		"postgres://%s:%s@%s:%s/%s",
@@ -235,7 +269,6 @@ func main() {
 		os.Getenv("DB_PORT"),
 		os.Getenv("DB_NAME"),
 )
-	ctx := context.Background()
 
 	Server = &DBServer{}
 	var err error
