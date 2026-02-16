@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"os"
 	"fmt"
+	"errors"
 
 	"github.com/go-chi/chi"
 	"github.com/jackc/pgx/v5"
@@ -55,7 +56,7 @@ type PatchDTO struct {
     Content *string `json:"content" validate:"omitempty,min=1"`
 }
 
-// MiddleWare Logger
+// Middleware Logger
 
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,13 +77,29 @@ func Logger(next http.Handler) http.Handler {
 	})
 }
 
+// Context Middleware
+
+func ContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // General handler
 
 func GetNotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	rows, err := Server.DB.Query(r.Context(), "SELECT * FROM notes;")
+	rows, err := Server.DB.Query(r.Context(), "SELECT id, title, content, created_at FROM notes;")
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
@@ -96,6 +113,11 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 
 		err := rows.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+                http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+                log.Println("Время ожидания запроса истекло:", err)
+                return
+            }
 			http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 			log.Println("Ошибка сканирования:", err)
 			return
@@ -105,6 +127,11 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := rows.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка итерации строк:", err)
 		return
@@ -141,6 +168,11 @@ func CreateNote(w http.ResponseWriter, r *http.Request) {
 
 	err = Server.DB.QueryRow(r.Context(), "INSERT INTO notes (title, content) VALUES ($1, $2) RETURNING id, created_at", note.Title, note.Content).Scan(&note.ID, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
@@ -168,6 +200,11 @@ func GetNote(w http.ResponseWriter, r *http.Request) {
 
 	err = row.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		if err == pgx.ErrNoRows {
 			http.Error(w, "Запись не найдена", http.StatusNotFound)
 			log.Println("Запись не найдена:", err)
@@ -213,6 +250,11 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 	query := "UPDATE notes SET title = COALESCE($1, title), content = COALESCE($2, content) WHERE id = $3 RETURNING id, title, content, created_at"
 	err = Server.DB.QueryRow(r.Context(), query, input.Title, input.Content, id).Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		if err == pgx.ErrNoRows {
 			http.Error(w, "Не найдено", http.StatusNotFound)
 			return
@@ -240,6 +282,11 @@ func DeleteNote(w http.ResponseWriter, r *http.Request) {
 
 	cmd, err := Server.DB.Exec(r.Context(), "DELETE FROM notes WHERE id = $1", id)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
@@ -257,7 +304,10 @@ func main() {
 	// Connection DB & Configs
 
 	r := chi.NewRouter()
+
 	r.Use(Logger)
+	r.Use(ContextMiddleware)
+
 	ctx := context.Background()
 
 	_ = godotenv.Load()
