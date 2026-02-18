@@ -1,114 +1,36 @@
-package main
+package handlers
 
 import (
+    "net/http"
+	"errors"
+	"log"
 	"context"
 	"encoding/json"
-	"log"
-	"net/http"
-	"time"
 	"strconv"
-	"os"
-	"fmt"
-	"errors"
-	"runtime/debug"
+	"project/internal/models"
+	"project/internal/db"
 
-	"github.com/go-chi/chi"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/joho/godotenv"
+	"github.com/go-chi/chi"
 )
 
-// Variables
-
-type DBServer struct {
+type NotesHandlerDB struct {
 	DB *pgxpool.Pool
+	Validate *validator.Validate
 }
 
-var Server *DBServer
-var validate = validator.New()
-
-type Note struct {
-	ID         int       `json:"id"`
-	Title      string    `json:"title"`
-	Content    string    `json:"content"`
-	CreatedAt  time.Time `json:"created_at"`
+func NotesHandler(dbServer *db.DBServer, validate *validator.Validate) *NotesHandlerDB {
+	return &NotesHandlerDB{
+		DB: dbServer.DB,
+		Validate: validate,
+	}
 }
 
-type responseWriter struct {
-	http.ResponseWriter
-	status int
-}
+// Read All Notes
 
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.status = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-// DTO Models
-
-type CreateDTO struct {
-	Title      string    `json:"title" validate:"required"`
-	Content    string    `json:"content" validate:"min=1"`
-}
-
-type PatchDTO struct {
-    Title   *string `json:"title" validate:"required,min=1"`
-    Content *string `json:"content" validate:"omitempty,min=1"`
-}
-
-// Middleware Recovery
-
-func RecoveryMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			stack := debug.Stack()
-
-			if err := recover(); err != nil {
-				log.Printf("PANIC: %v\n[%s] | {%s} | [IP:PORT - %s]\nStack:\n%s\n", err, r.Method, r.URL.String(), r.RemoteAddr, stack)
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-		}()
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-// Middleware Logger
-
-func Logger(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		rw := &responseWriter{
-			ResponseWriter: w,
-			status:         http.StatusOK,
-		}
-
-		next.ServeHTTP(rw, r)
-
-		duration := time.Since(start)
-
-		log.Printf(
-			"[%s] | {%s} | [Status: %d] %v | [IP:PORT - %s]\nUser Agent: %s", r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr, r.UserAgent(),
-		)
-	})
-}
-
-// Middleware Context
-
-func ContextMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// General handler
-
-func GetNotes(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	rows, err := Server.DB.Query(r.Context(), "SELECT id, title, content, created_at FROM notes;")
@@ -124,10 +46,10 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	notes := []Note{}
+	notes := []models.Note{}
 
 	for rows.Next() {
-		note := Note{}
+		note := models.Note{}
 
 		err := rows.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 		if err != nil {
@@ -158,12 +80,12 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(notes)
 }
 
-// Create
+// Create Note
 
-func CreateNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var input CreateDTO
+	var input models.CreateDTO
 
 	err := json.NewDecoder(r.Body).Decode(&input)
 	if err != nil {
@@ -171,15 +93,16 @@ func CreateNote(w http.ResponseWriter, r *http.Request) {
 		log.Println("Ошибка парсинга JSON:", err)
 		return
 	}
+	defer r.Body.Close()
 
-	err = validate.Struct(input)
+	err = Server.Validate.Struct(input)
 	if err != nil {
 		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
 		log.Printf("Ошибка валидации: %v\n%+v", err, input)
 		return
 	}
 
-	note := Note{
+	note := models.Note{
 		Title:     input.Title,
 		Content:   input.Content,
 	}
@@ -200,9 +123,9 @@ func CreateNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Get
+// Read Note
 
-func GetNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) ReadNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -214,7 +137,7 @@ func GetNote(w http.ResponseWriter, r *http.Request) {
 
 	row := Server.DB.QueryRow(r.Context(), "SELECT id, title, content, created_at FROM notes WHERE id = $1", id)
 
-	var note Note
+	var note models.Note
 
 	err = row.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 	if err != nil {
@@ -236,9 +159,9 @@ func GetNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Update
+// Update Note
 
-func UpdateNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) UpdateNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -248,7 +171,7 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := PatchDTO{}
+	input := models.UpdateDTO{}
 	defer r.Body.Close()
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -257,13 +180,13 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validate.Struct(input); err != nil {
+	if err := Server.Validate.Struct(input); err != nil {
 		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
 		log.Printf("Ошибка валидации: %v\n%+v", err, input)
 		return
 	}
 
-	note := Note{}
+	note := models.Note{}
 
 	query := "UPDATE notes SET title = COALESCE($1, title), content = COALESCE($2, content) WHERE id = $3 RETURNING id, title, content, created_at"
 	err = Server.DB.QueryRow(r.Context(), query, input.Title, input.Content, id).Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
@@ -286,9 +209,9 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Delete
+// Delete Note
 
-func DeleteNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) DeleteNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -316,54 +239,4 @@ func DeleteNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func main() {
-	// Connection DB & Configs
-
-	r := chi.NewRouter()
-
-	r.Use(RecoveryMiddleware)
-	r.Use(Logger)
-	r.Use(ContextMiddleware)
-
-	ctx := context.Background()
-
-	_ = godotenv.Load()
-	conn := fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s",
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_PORT"),
-		os.Getenv("DB_NAME"),
-)
-
-	Server = &DBServer{}
-	var err error
-
-	Server.DB, err = pgxpool.New(ctx, conn)
-	if err != nil {
-		log.Fatal("Нет подключения к БД:", err)
-	}
-	defer Server.DB.Close()
-
-	log.Println("Подключен к БД")
-
-	// Handlers
-
-	r.Get("/notes", GetNotes)
-
-	r.Get("/notes/{ID}", GetNote)
-	r.Post("/notes", CreateNote)
-	r.Patch("/notes/{ID}", UpdateNote)
-	r.Delete("/notes/{ID}", DeleteNote)
-
-	// Starting
-
-	log.Println("Сервер запущен на http://localhost:8080")
-	err = http.ListenAndServe(":8080", r)
-	if err != nil {
-		log.Fatal("Сервер словил грустного:", err)
-	}
 }
