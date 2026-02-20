@@ -14,9 +14,11 @@ import (
 )
 
 func main() {
+	// Variables
+
 	r := chi.NewRouter()
 	ctx := context.Background()
-	_ = godotenv.Load()
+	godotenv.Load(".env")
 	validate := validator.New()
 
 	// Middleware
@@ -29,7 +31,7 @@ func main() {
 
 	dbServer, err := db.InitDB(ctx)
 	if err != nil {
-		log.Fatal("Нет подключения к БД")
+		log.Fatal("Нет подключения к БД:", err)
 	}
 	defer dbServer.DB.Close()
 
@@ -45,6 +47,8 @@ func main() {
 	r.Post("/notes", notesHandler.CreateNote)
 	r.Patch("/notes/{ID}", notesHandler.UpdateNote)
 	r.Delete("/notes/{ID}", notesHandler.DeleteNote)
+
+	// Starting
 
 	log.Println("Сервер запущен на http://localhost:8080")
 	err = http.ListenAndServe(":8080", r)
