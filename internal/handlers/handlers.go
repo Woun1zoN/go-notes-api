@@ -1,70 +1,63 @@
-package main
+package handlers
 
 import (
+    "net/http"
+	"errors"
+	"log"
 	"context"
 	"encoding/json"
-	"log"
-	"net/http"
-	"time"
 	"strconv"
-	"os"
-	"fmt"
+	"project/internal/models"
+	"project/internal/db"
 
-	"github.com/go-chi/chi"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/joho/godotenv"
+	"github.com/go-chi/chi"
 )
 
-// Variables
-
-type DBServer struct {
+type NotesHandlerDB struct {
 	DB *pgxpool.Pool
+	Validate *validator.Validate
 }
 
-var Server *DBServer
-var validate = validator.New()
-
-type Note struct {
-	ID         int       `json:"id"`
-	Title      string    `json:"title"`
-	Content    string    `json:"content"`
-	CreatedAt  time.Time `json:"created_at"`
+func NotesHandler(dbServer *db.DBServer, validate *validator.Validate) *NotesHandlerDB {
+	return &NotesHandlerDB{
+		DB: dbServer.DB,
+		Validate: validate,
+	}
 }
 
-// DTO Models
+// Read All Notes
 
-type CreateDTO struct {
-	Title      string    `json:"title" validate:"required"`
-	Content    string    `json:"content" validate:"min=1"`
-}
-
-type PatchDTO struct {
-    Title   *string `json:"title" validate:"required,min=1"`
-    Content *string `json:"content" validate:"omitempty,min=1"`
-}
-
-// General handler
-
-func GetNotes(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	rows, err := Server.DB.Query(r.Context(), "SELECT * FROM notes;")
+	rows, err := Server.DB.Query(r.Context(), "SELECT id, title, content, created_at FROM notes;")
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
 	}
 	defer rows.Close()
 
-	notes := []Note{}
+	notes := []models.Note{}
 
 	for rows.Next() {
-		note := Note{}
+		note := models.Note{}
 
 		err := rows.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+                http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+                log.Println("Время ожидания запроса истекло:", err)
+                return
+            }
 			http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 			log.Println("Ошибка сканирования:", err)
 			return
@@ -74,6 +67,11 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := rows.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка итерации строк:", err)
 		return
@@ -82,12 +80,12 @@ func GetNotes(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(notes)
 }
 
-// Create
+// Create Note
 
-func CreateNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var input CreateDTO
+	var input models.CreateDTO
 
 	err := json.NewDecoder(r.Body).Decode(&input)
 	if err != nil {
@@ -95,21 +93,27 @@ func CreateNote(w http.ResponseWriter, r *http.Request) {
 		log.Println("Ошибка парсинга JSON:", err)
 		return
 	}
+	defer r.Body.Close()
 
-	err = validate.Struct(input)
+	err = Server.Validate.Struct(input)
 	if err != nil {
 		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
 		log.Printf("Ошибка валидации: %v\n%+v", err, input)
 		return
 	}
 
-	note := Note{
+	note := models.Note{
 		Title:     input.Title,
 		Content:   input.Content,
 	}
 
 	err = Server.DB.QueryRow(r.Context(), "INSERT INTO notes (title, content) VALUES ($1, $2) RETURNING id, created_at", note.Title, note.Content).Scan(&note.ID, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
@@ -119,9 +123,9 @@ func CreateNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Get
+// Read Note
 
-func GetNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) ReadNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -133,10 +137,15 @@ func GetNote(w http.ResponseWriter, r *http.Request) {
 
 	row := Server.DB.QueryRow(r.Context(), "SELECT id, title, content, created_at FROM notes WHERE id = $1", id)
 
-	var note Note
+	var note models.Note
 
 	err = row.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		if err == pgx.ErrNoRows {
 			http.Error(w, "Запись не найдена", http.StatusNotFound)
 			log.Println("Запись не найдена:", err)
@@ -150,9 +159,9 @@ func GetNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Update
+// Update Note
 
-func UpdateNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) UpdateNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -162,7 +171,7 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := PatchDTO{}
+	input := models.UpdateDTO{}
 	defer r.Body.Close()
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -171,17 +180,22 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validate.Struct(input); err != nil {
+	if err := Server.Validate.Struct(input); err != nil {
 		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
 		log.Printf("Ошибка валидации: %v\n%+v", err, input)
 		return
 	}
 
-	note := Note{}
+	note := models.Note{}
 
 	query := "UPDATE notes SET title = COALESCE($1, title), content = COALESCE($2, content) WHERE id = $3 RETURNING id, title, content, created_at"
 	err = Server.DB.QueryRow(r.Context(), query, input.Title, input.Content, id).Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		if err == pgx.ErrNoRows {
 			http.Error(w, "Не найдено", http.StatusNotFound)
 			return
@@ -195,9 +209,9 @@ func UpdateNote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(note)
 }
 
-// Delete
+// Delete Note
 
-func DeleteNote(w http.ResponseWriter, r *http.Request) {
+func (Server *NotesHandlerDB) DeleteNote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	idStr := chi.URLParam(r, "ID")
@@ -209,6 +223,11 @@ func DeleteNote(w http.ResponseWriter, r *http.Request) {
 
 	cmd, err := Server.DB.Exec(r.Context(), "DELETE FROM notes WHERE id = $1", id)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
+            log.Println("Время ожидания запроса истекло:", err)
+            return
+        }
 		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
 		log.Println("Ошибка БД:", err)
 		return
@@ -220,48 +239,4 @@ func DeleteNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func main() {
-	// Connection DB & Configs
-
-	r := chi.NewRouter()
-	_ = godotenv.Load()
-	conn := fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s",
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_PORT"),
-		os.Getenv("DB_NAME"),
-)
-	ctx := context.Background()
-
-	Server = &DBServer{}
-	var err error
-
-	Server.DB, err = pgxpool.New(ctx, conn)
-	if err != nil {
-		log.Fatal("Нет подключения к БД:", err)
-	}
-	defer Server.DB.Close()
-
-	log.Println("Подключен к БД")
-
-	// Handlers
-
-	r.Get("/notes", GetNotes)
-
-	r.Get("/notes/{ID}", GetNote)
-	r.Post("/notes", CreateNote)
-	r.Patch("/notes/{ID}", UpdateNote)
-	r.Delete("/notes/{ID}", DeleteNote)
-
-	// Starting
-
-	log.Println("Сервер запущен на http://localhost:8080")
-	err = http.ListenAndServe(":8080", r)
-	if err != nil {
-		log.Fatal("Сервер словил грустного:", err)
-	}
 }
