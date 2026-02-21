@@ -1,9 +1,9 @@
 package middleware
 
 import (
-    "net/http"
-	"time"
 	"log"
+	"net/http"
+	"time"
 )
 
 type responseWriter struct {
@@ -16,7 +16,7 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-func MiddlewareLogger(next http.Handler) http.Handler {
+func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -28,9 +28,11 @@ func MiddlewareLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
+		id := GetRequestID(r)
 
 		log.Printf(
-			"[%s] | {%s} | [Status: %d] %v | [IP:PORT - %s]\nUser Agent: %s", r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr, r.UserAgent(),
+			"ID Request: %s\n\n[%s] | {%s} | [Status: %d] %v | [IP:PORT - %s]\nUser Agent: %s\n",
+			id, r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr, r.UserAgent(),
 		)
 	})
 }

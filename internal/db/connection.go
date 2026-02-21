@@ -13,13 +13,15 @@ type DBServer struct {
 }
 
 func InitDB(ctx context.Context) (*DBServer, error) {
+	user := os.Getenv("DB_USER")
+    password := os.Getenv("DB_PASSWORD")
+    host := os.Getenv("DB_HOST")
+    port := os.Getenv("DB_PORT")
+    dbname := os.Getenv("DB_NAME")
+
 	conn := fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s",
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_PORT"),
-		os.Getenv("DB_NAME"),
+		"postgres://%s:%s@%s:%s/%s?sslmode=require",
+		user, password, host, port, dbname,
 	)
 
 	pool, err := pgxpool.New(ctx, conn)

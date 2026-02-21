@@ -18,14 +18,15 @@ func main() {
 
 	r := chi.NewRouter()
 	ctx := context.Background()
-	godotenv.Load(".env")
 	validate := validator.New()
+	godotenv.Load("../.env")
 
 	// Middleware
 
-	r.Use(middleware.MiddlewareRecovery)
-	r.Use(middleware.MiddlewareLogger)
-	r.Use(middleware.MiddlewareContext)
+	r.Use(middleware.RequestID)
+	r.Use(middleware.Recovery)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Context)
 
 	// DB Connection
 
