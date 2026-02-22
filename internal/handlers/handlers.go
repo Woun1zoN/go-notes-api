@@ -1,19 +1,18 @@
 package handlers
 
 import (
-    "net/http"
-	"errors"
-	"log"
-	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
-	"project/internal/models"
-	"project/internal/db"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5"
-	"github.com/go-playground/validator/v10"
+	"project/internal/db"
+	"project/internal/middleware"
+	"project/internal/models"
+	"project/internal/errors"
+
 	"github.com/go-chi/chi"
+	"github.com/go-playground/validator/v10"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type NotesHandlerDB struct {
@@ -34,15 +33,8 @@ func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 
 	rows, err := Server.DB.Query(r.Context(), "SELECT id, title, content, created_at FROM notes;")
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка БД:", err)
-		return
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
 	}
 	defer rows.Close()
 
@@ -52,30 +44,16 @@ func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) 
 		note := models.Note{}
 
 		err := rows.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-                http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-                log.Println("Время ожидания запроса истекло:", err)
-                return
-            }
-			http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-			log.Println("Ошибка сканирования:", err)
-			return
-		}
+		if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+            return
+        }
 
 		notes = append(notes, note)
 	}
 
-	if err := rows.Err(); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка итерации строк:", err)
-		return
-	}
+	if err := rows.Err(); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	json.NewEncoder(w).Encode(notes)
 }
@@ -88,19 +66,15 @@ func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request)
 	var input models.CreateDTO
 
 	err := json.NewDecoder(r.Body).Decode(&input)
-	if err != nil {
-		http.Error(w, "Некорретный JSON", http.StatusBadRequest)
-		log.Println("Ошибка парсинга JSON:", err)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 	defer r.Body.Close()
 
 	err = Server.Validate.Struct(input)
-	if err != nil {
-		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
-		log.Printf("Ошибка валидации: %v\n%+v", err, input)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	note := models.Note{
 		Title:     input.Title,
@@ -108,16 +82,9 @@ func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request)
 	}
 
 	err = Server.DB.QueryRow(r.Context(), "INSERT INTO notes (title, content) VALUES ($1, $2) RETURNING id, created_at", note.Title, note.Content).Scan(&note.ID, &note.CreatedAt)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка БД:", err)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(note)
@@ -130,31 +97,18 @@ func (Server *NotesHandlerDB) ReadNote(w http.ResponseWriter, r *http.Request) {
 
 	idStr := chi.URLParam(r, "ID")
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "ID не найден", http.StatusBadRequest)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	row := Server.DB.QueryRow(r.Context(), "SELECT id, title, content, created_at FROM notes WHERE id = $1", id)
 
 	var note models.Note
 
 	err = row.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		if err == pgx.ErrNoRows {
-			http.Error(w, "Запись не найдена", http.StatusNotFound)
-			log.Println("Запись не найдена:", err)
-			return
-		}
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка сканирования данных:", err)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	json.NewEncoder(w).Encode(note)
 }
@@ -166,44 +120,28 @@ func (Server *NotesHandlerDB) UpdateNote(w http.ResponseWriter, r *http.Request)
 
 	idStr := chi.URLParam(r, "ID")
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Некорректный ID", http.StatusBadRequest)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	input := models.UpdateDTO{}
 	defer r.Body.Close()
 
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Некорректный JSON", http.StatusBadRequest)
-		log.Printf("Запрос с некорректным JSON: %v\n%+v", err, input)
-		return
-	}
+	if err := json.NewDecoder(r.Body).Decode(&input); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
-	if err := Server.Validate.Struct(input); err != nil {
-		http.Error(w, "Ошибка валидации", http.StatusBadRequest)
-		log.Printf("Ошибка валидации: %v\n%+v", err, input)
-		return
-	}
+	if err := Server.Validate.Struct(input); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	note := models.Note{}
 
 	query := "UPDATE notes SET title = COALESCE($1, title), content = COALESCE($2, content) WHERE id = $3 RETURNING id, title, content, created_at"
 	err = Server.DB.QueryRow(r.Context(), query, input.Title, input.Content, id).Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		if err == pgx.ErrNoRows {
-			http.Error(w, "Не найдено", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка БД:", err)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
     w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(note)
@@ -222,21 +160,14 @@ func (Server *NotesHandlerDB) DeleteNote(w http.ResponseWriter, r *http.Request)
 	}
 
 	cmd, err := Server.DB.Exec(r.Context(), "DELETE FROM notes WHERE id = $1", id)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-            http.Error(w, "Время ожидания запроса истекло", http.StatusRequestTimeout)
-            log.Println("Время ожидания запроса истекло:", err)
-            return
-        }
-		http.Error(w, "Ошибка БД", http.StatusInternalServerError)
-		log.Println("Ошибка БД:", err)
-		return
-	}
+	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+        return
+    }
 
 	if cmd.RowsAffected() == 0 {
-		http.Error(w, "Не найдено", http.StatusNotFound)
-		return
-	}
+        errors.HTTPErrors(w, errors.ErrNoRowsAffected, middleware.GetRequestID(r))
+        return
+}
 
 	w.WriteHeader(http.StatusNoContent)
 }
