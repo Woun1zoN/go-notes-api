@@ -8,7 +8,7 @@ import (
 	"project/internal/db"
 	"project/internal/middleware"
 	"project/internal/models"
-	"project/internal/errors"
+	"project/internal/httperrors"
 
 	"github.com/go-chi/chi"
 	"github.com/go-playground/validator/v10"
@@ -33,7 +33,7 @@ func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 
 	rows, err := Server.DB.Query(r.Context(), "SELECT id, title, content, created_at FROM notes;")
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
 	}
 	defer rows.Close()
@@ -44,14 +44,14 @@ func (Server *NotesHandlerDB) ReadNotes(w http.ResponseWriter, r *http.Request) 
 		note := models.Note{}
 
 		err := rows.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-		if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+		if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
             return
         }
 
 		notes = append(notes, note)
 	}
 
-	if err := rows.Err(); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if err := rows.Err(); httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -66,13 +66,13 @@ func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request)
 	var input models.CreateDTO
 
 	err := json.NewDecoder(r.Body).Decode(&input)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 	defer r.Body.Close()
 
 	err = Server.Validate.Struct(input)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -82,7 +82,7 @@ func (Server *NotesHandlerDB) CreateNote(w http.ResponseWriter, r *http.Request)
 	}
 
 	err = Server.DB.QueryRow(r.Context(), "INSERT INTO notes (title, content) VALUES ($1, $2) RETURNING id, created_at", note.Title, note.Content).Scan(&note.ID, &note.CreatedAt)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -97,7 +97,7 @@ func (Server *NotesHandlerDB) ReadNote(w http.ResponseWriter, r *http.Request) {
 
 	idStr := chi.URLParam(r, "ID")
 	id, err := strconv.Atoi(idStr)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -106,7 +106,7 @@ func (Server *NotesHandlerDB) ReadNote(w http.ResponseWriter, r *http.Request) {
 	var note models.Note
 
 	err = row.Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -120,18 +120,18 @@ func (Server *NotesHandlerDB) UpdateNote(w http.ResponseWriter, r *http.Request)
 
 	idStr := chi.URLParam(r, "ID")
 	id, err := strconv.Atoi(idStr)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
 	input := models.UpdateDTO{}
 	defer r.Body.Close()
 
-	if err := json.NewDecoder(r.Body).Decode(&input); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if err := json.NewDecoder(r.Body).Decode(&input); httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
-	if err := Server.Validate.Struct(input); errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if err := Server.Validate.Struct(input); httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -139,7 +139,7 @@ func (Server *NotesHandlerDB) UpdateNote(w http.ResponseWriter, r *http.Request)
 
 	query := "UPDATE notes SET title = COALESCE($1, title), content = COALESCE($2, content) WHERE id = $3 RETURNING id, title, content, created_at"
 	err = Server.DB.QueryRow(r.Context(), query, input.Title, input.Content, id).Scan(&note.ID, &note.Title, &note.Content, &note.CreatedAt)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
@@ -160,12 +160,12 @@ func (Server *NotesHandlerDB) DeleteNote(w http.ResponseWriter, r *http.Request)
 	}
 
 	cmd, err := Server.DB.Exec(r.Context(), "DELETE FROM notes WHERE id = $1", id)
-	if errors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
+	if httperrors.HTTPErrors(w, err, middleware.GetRequestID(r)) {
         return
     }
 
 	if cmd.RowsAffected() == 0 {
-        errors.HTTPErrors(w, errors.ErrNoRowsAffected, middleware.GetRequestID(r))
+        httperrors.HTTPErrors(w, httperrors.ErrNoRowsAffected, middleware.GetRequestID(r))
         return
 }
 

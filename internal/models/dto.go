@@ -1,9 +1,5 @@
 package models
 
-import (
-    
-)
-
 type CreateDTO struct {
 	Title      string    `json:"title" validate:"required"`
 	Content    string    `json:"content" validate:"min=1"`
