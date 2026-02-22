@@ -19,6 +19,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		id := GetRequestID(r)
+
+		log.Printf(
+			"ID Request: %s | START | [%s] %s | [IP:PORT: %s]",
+			id, r.Method, r.URL.Path, r.RemoteAddr,
+		)
 
 		rw := &responseWriter{
 			ResponseWriter: w,
@@ -28,11 +34,9 @@ func Logger(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
-		id := GetRequestID(r)
-
 		log.Printf(
-			"ID Request: %s\n\n[%s] | {%s} | [Status: %d] %v | [IP:PORT - %s]\nUser Agent: %s\n",
-			id, r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr, r.UserAgent(),
+			"ID Request: %s | END   | [%s] %s | Status: %d | Duration: %v | [IP:PORT: %s]",
+			id, r.Method, r.URL.Path, rw.status, duration, r.RemoteAddr,
 		)
 	})
 }
